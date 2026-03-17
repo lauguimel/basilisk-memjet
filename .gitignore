@@ -1,0 +1,26 @@
+# Compiled binaries
+cases/01-laplace/laplace
+cases/02-drop-impact/impact
+cases/03-coalescence/coalescence
+
+# Simulation output
+*.dat
+*.mp4
+*.ppm
+*.dump
+
+# Generated plots
+cases/*/*.png
+
+# Basilisk generated files
+_*
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
