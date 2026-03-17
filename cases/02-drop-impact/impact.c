@@ -1,25 +1,26 @@
 /**
 # Axisymmetric drop impact on a solid surface
 
-A spherical droplet of diameter $D$ impacts a flat solid surface at
-velocity $U$. The simulation is axisymmetric (2D with `axi.h`).
+A spherical droplet of diameter $D = 1$ impacts a flat solid surface
+at velocity $U = 1$. The simulation is axisymmetric (2D with `axi.h`).
 
-## Parameters
+Inspired by the Basilisk test case `fall.c` (Figueiredo et al., 2016).
 
-- Diameter: $D = 1$
-- Impact velocity: $U = 1$
+## Conventions with `axi.h`
+
+With `axi.h`, the x-axis is the **axis of symmetry** and the y-axis
+is the **radial** direction. The wall (solid surface) is at the
+**left** boundary (x = 0).
+
+## Dimensionless parameters
+
+All quantities are made dimensionless using $D$, $U$, and $\rho_l$:
+
+- $Re = \rho_l U D / \mu_l = 100$
+- $We = \rho_l U^2 D / \sigma = 50$ (moderate spreading)
+- $Fr = U / \sqrt{g D} = 2.26$ (same as fall.c)
 - Density ratio: $\rho_l / \rho_g = 1000$
-- Reynolds number: $Re = \rho_l U D / \mu_l = 1000$
-- Weber number: $We = \rho_l U^2 D / \sigma = 250$
-
-## Geometry
-
-The drop center starts at $(0, 1.5 D/2)$ above the surface (y = 0).
-The domain is $[0, 4] \times [0, 4]$, axisymmetric around $y = 0$
-(which is actually the axis of symmetry in Basilisk's `axi.h`).
-
-Note: with `axi.h`, the x-axis is the axis of symmetry and the
-y-axis is the radial direction. So we set up the drop along x.
+- Viscosity ratio: $\mu_l / \mu_g = 1000$
 */
 
 #include "axi.h"
@@ -27,84 +28,87 @@ y-axis is the radial direction. So we set up the drop along x.
 #include "two-phase.h"
 #include "tension.h"
 
-// Physical parameters
-#define DIAMETER 1.0
-#define RADIUS (DIAMETER / 2.0)
-#define U0 (-1.0)     // downward velocity
-#define RHO_L 1.0
-#define RHO_G 1e-3
-#define RE 1000.
-#define WE 250.
-#define MU_L (RHO_L * fabs(U0) * DIAMETER / RE)
-#define SIGMA_COEFF (RHO_L * sq(U0) * DIAMETER / WE)
+#define RE 100.
+#define WE 50.
+#define FR 2.26
+#define RHO_r 0.001     // rho_g / rho_l
+#define MU_r  0.001     // mu_g / mu_l
+#define LEVEL 7
 
-#define MAXLEVEL 8
-#define MINLEVEL 4
+/**
+The drop comes from the right. We allow outflow there. */
+
+u.n[right] = neumann(0);
+p[right]   = dirichlet(0);
+
+/**
+The wall is at the left side. No-slip + non-wetting for VOF. */
+
+u.t[left] = dirichlet(0);
+f[left]   = 0.;
 
 int main() {
-  size(4.0);
-  origin(0., 0.);
-  init_grid(1 << MINLEVEL);
+  size(2.6);
+  init_grid(1 << LEVEL);
 
-  rho1 = RHO_L;
-  rho2 = RHO_G;
-  mu1 = MU_L;
-  mu2 = MU_L / 50.;
-  f.sigma = SIGMA_COEFF;
+  rho1 = 1.;
+  rho2 = RHO_r;
+  mu1 = 1. / RE;
+  mu2 = MU_r / RE;
+  f.sigma = 1. / WE;
 
-  DT = 1e-3;
+  DT = 2e-3;
   TOLERANCE = 1e-4;
   run();
 }
 
-// No-slip on the left boundary (the solid wall in axisymmetric coords)
-u.t[left] = dirichlet(0.);
-u.n[left] = dirichlet(0.);
-
-// Outflow on top and right
-u.n[right] = neumann(0.);
-p[right] = dirichlet(0.);
-u.n[top] = neumann(0.);
-p[top] = dirichlet(0.);
-
 event init(t = 0) {
-  // Drop centered at (1.5*RADIUS, 0) — above the wall at x = 0
-  fraction(f, sq(RADIUS) - sq(x - 3. * RADIUS) - sq(y));
+  /**
+  The drop is centered at (2, 0) with radius 0.5 (diameter 1). */
 
-  // Initial downward velocity inside the drop
+  fraction(f, sq(0.5) - sq(x - 2.) - sq(y));
+
+  /**
+  The initial velocity of the droplet is -1 (toward the wall). */
+
   foreach()
-    u.x[] = f[] * U0;
+    u.x[] = -f[];
 }
 
 /**
-Gravity acts in the negative x-direction (toward the wall).
-*/
+Gravity acts in the negative x-direction (toward the wall). */
 
 event acceleration(i++) {
   face vector av = a;
   foreach_face(x)
-    av.x[] -= 9.81;
+    av.x[] -= 1. / sq(FR);
 }
 
 /**
-Adaptive mesh refinement based on the interface and velocity.
-*/
+Adaptive mesh refinement based on the interface and velocity. */
 
+#if TREE
 event adapt(i++) {
-  adapt_wavelet({f, u.x, u.y}, (double[]){1e-3, 1e-2, 1e-2},
-                maxlevel = MAXLEVEL, minlevel = MINLEVEL);
+  adapt_wavelet({f, u.x, u.y}, (double[]){1e-2, 5e-3, 5e-3},
+                maxlevel = LEVEL, minlevel = LEVEL - 2);
 }
+#endif
 
-event logfile(i += 20) {
-  fprintf(stderr, "t = %.4f, i = %d, dt = %g, cells = %ld\n",
-          t, i, dt, grid->tn);
+/**
+Track the spreading diameter of the droplet on the wall. */
+
+event logfile(i += 20; t <= 5.) {
+  scalar pos[];
+  position(f, pos, {0, 1});
+  double dmax = 2. * statsf(pos).max;
+  fprintf(stderr, "t = %.4f, spread = %.4f, dt = %g, cells = %ld\n",
+          t, dmax, dt, grid->tn);
 }
 
 /**
-Output the interface shape at regular intervals.
-*/
+Output the interface shape at regular intervals. */
 
-event snapshots(t = 0; t <= 3.0; t += 0.25) {
+event snapshots(t = 0; t <= 5.; t += 0.5) {
   char name[80];
   sprintf(name, "interface-%04.2f.dat", t);
   FILE * fp = fopen(name, "w");
@@ -112,8 +116,7 @@ event snapshots(t = 0; t <= 3.0; t += 0.25) {
   fclose(fp);
 }
 
-event end(t = 3.0) {
+event end(t = 5.) {
   fprintf(stdout, "# Drop impact simulation complete.\n");
-  fprintf(stdout, "# Re = %g, We = %g\n", RE, WE);
-  fprintf(stdout, "# Interface files: interface-*.dat\n");
+  fprintf(stdout, "# Re = %g, We = %g, Fr = %g\n", RE, WE, FR);
 }
